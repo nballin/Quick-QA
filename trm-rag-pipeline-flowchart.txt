@@ -1,0 +1,71 @@
+TRM / RAG Pipeline Flowchart
+============================
+
+Flow (top to bottom):
+
++------------------------------------------------------------+
+| 1. User query (raw text)                                   |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 2. TRM query encoder [purple]                              |
+|    - Replaces BPE/WordPiece tokenization                   |
+|    - Query -> latent state via recursive updates           |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 3. Retrieval [blue]                                        |
+|    - Latent state queries corpus (BM25 / FAISS)            |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 4. Candidate passages (raw text)                           |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 5. TRM passage encoder [purple]                            |
+|    - Replaces BPE/WordPiece tokenization                   |
+|    - Passage -> latent state, query-conditioned            |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 6. Lightweight scorer / re-ranker [green]                  |
+|    - Compares query + passage latent states                |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 7. Top-k ranked passages                                   |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 8. Reader / answer extractor [green]                       |
+|    - Minimal model, operates on latent states              |
++------------------------------------------------------------+
+                              |
+                              v
+
++------------------------------------------------------------+
+| 9. Final answer                                            |
++------------------------------------------------------------+
+
+
+Color legend
+------------
+- Grey:  Data inputs, intermediate states, final output (user query, candidate passages, top-k passages, final answer)
+- Purple: TRM encoding steps (query encoder, passage encoder)
+- Blue:  Retrieval
+- Green: Scoring, ranking, extraction (scorer/re-ranker, reader)
