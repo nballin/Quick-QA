@@ -62,10 +62,33 @@ Flow (top to bottom):
 | 9. Final answer                                            |
 +------------------------------------------------------------+
 
+Here's a breakdown of every box in the flowchart:
 
-Color legend
-------------
-- Grey:  Data inputs, intermediate states, final output (user query, candidate passages, top-k passages, final answer)
-- Purple: TRM encoding steps (query encoder, passage encoder)
-- Blue:  Retrieval
-- Green: Scoring, ranking, extraction (scorer/re-ranker, reader)
+**User query (raw text)**
+The starting point — whatever the user types in as their question. No preprocessing, no tokenization yet. Just the raw natural language input.
+
+**TRM query encoder**
+This is the first key innovation in your architecture. Instead of running the query through BPE tokenization and a transformer encoder, TRM takes the raw query, converts it into a character or byte-level grid, and runs recursive latent updates to produce a single rich latent state representing the query. This is where tokenization cost gets eliminated.
+
+**Retrieval**
+Uses the TRM-produced query latent state to search the corpus via FAISS similarity search. Returns the top ~100 roughly relevant passages. Fast and broad — precision matters less here than recall.
+
+**Candidate passages (raw text)**
+The shortlist of ~100 passages pulled back from the corpus. These are raw text chunks, typically 100-500 words each, that retrieval flagged as potentially relevant. The right answer should be somewhere in this list.
+
+**TRM passage encoder**
+The second key innovation. Each candidate passage gets encoded by TRM individually — again replacing BPE tokenization — producing a latent state per passage. Critically this encoding is query-conditioned, meaning TRM encodes each passage with awareness of what the query is asking. TRM's high throughput makes encoding 100 passages per query feasible and cheap.
+
+**Lightweight scorer / re-ranker**
+Compares the query latent state against each passage latent state — either via dot product similarity or a small learned scoring head — and ranks all candidate passages by relevance. Narrows 100 candidates down to top 3-5. This is where your augmentation and majority vote trick from the paper can be applied to improve robustness.
+
+**Top-k ranked passages**
+The 3-5 highest scoring passages after re-ranking. These are the ones the reader will work with. The quality of this shortlist is the ceiling of your system's final accuracy.
+
+**Reader / answer extractor**
+Takes the top-k passage latent states and extracts the final answer. In your architecture this should be a very lightweight component — potentially just a shallow network or linear layer — since the heavy lifting was already done by TRM encoding. For an extractive setup it predicts the answer span within the top passage.
+
+**Final answer**
+The output returned to the user — either an extracted text span pointing directly to where in the passage the answer was found, or a short generated response depending on which reader type you choose.
+
+Want to start sketching the implementation plan for any specific box?

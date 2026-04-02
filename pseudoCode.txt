@@ -1,0 +1,335 @@
+trm_qa_system/
+│
+├── main.py                  # entry point, runs the full pipeline
+│
+├── pipeline/
+│   ├── ingestion.py         # loads and chunks input documents
+│   ├── retrieval.py         # builds index, searches corpus
+│   ├── encoder.py           # encodes query and passages
+│   ├── scorer.py            # re-ranks candidate passages
+│   ├── reader.py            # extracts final answer
+│
+├── trm/
+│   ├── model.py             # TRM model loading and inference
+│   ├── encoder.py           # TRM-specific encoding logic (step 4+)
+│
+├── demo/
+│   ├── app.py               # Streamlit demo interface
+│
+├── utils/
+│   ├── chunker.py           # splits documents into passages
+│   ├── metrics.py           # evaluation and timing functions
+│
+├── data/
+│   ├── documents/           # user uploaded documents go here
+│   ├── index/               # saved FAISS index goes here
+│
+├── requirements.txt         # all dependencies
+└── README.md                # project documentation
+
+
+main.py
+  → ingestion.py    (load documents)
+  → chunker.py      (split into passages)
+  → retrieval.py    (build index, search)
+  → encoder.py      (encode query + passages)
+  → scorer.py       (re-rank)
+  → reader.py       (extract answer)
+  → back to main.py (return answer)
+
+
+  ================================================================
+TRM QA SYSTEM — STRUCTURED BUILD STEPS
+================================================================
+
+----------------------------------------------------------------
+PHASE 1 — PROJECT SETUP
+----------------------------------------------------------------
+
+STEP 1.1 — Create project folder structure
+  Create the following folders and empty files:
+  
+  trm_qa_system/
+  ├── main.py
+  ├── pipeline/
+  │   ├── __init__.py
+  │   ├── ingestion.py
+  │   ├── retrieval.py
+  │   ├── encoder.py
+  │   ├── scorer.py
+  │   └── reader.py
+  ├── trm/
+  │   ├── __init__.py
+  │   ├── model.py
+  │   └── encoder.py
+  ├── demo/
+  │   ├── __init__.py
+  │   └── app.py
+  ├── utils/
+  │   ├── __init__.py
+  │   ├── chunker.py
+  │   └── metrics.py
+  ├── data/
+  │   ├── documents/
+  │   └── index/
+  ├── requirements.txt
+  └── README.md
+
+STEP 1.2 — Create requirements.txt with dependencies
+  transformers
+  torch
+  faiss-cpu
+  rank_bm25
+  streamlit
+  sentence-transformers
+  PyPDF2
+  python-docx
+  numpy
+  tqdm
+
+STEP 1.3 — Install dependencies
+  Run: pip install -r requirements.txt
+
+----------------------------------------------------------------
+PHASE 2 — DOCUMENT INGESTION (ingestion.py + chunker.py)
+----------------------------------------------------------------
+
+STEP 2.1 — Build ingestion.py
+  Goal: load documents from data/documents/ folder
+  Input: folder path containing .txt, .pdf, .docx files
+  Output: list of raw text strings, one per document
+  
+  Functions to write:
+    load_txt(filepath) -> string
+    load_pdf(filepath) -> string
+    load_docx(filepath) -> string
+    load_all_documents(folder_path) -> list of strings
+
+STEP 2.2 — Build chunker.py
+  Goal: split documents into passages
+  Input: list of raw text strings
+  Output: list of passage dictionaries
+  
+  Each passage dictionary contains:
+    passage_id: unique identifier
+    passage_text: the text chunk (100-500 words)
+    source_document: which document it came from
+  
+  Functions to write:
+    chunk_text(text, chunk_size=200, overlap=50) -> list of strings
+    chunk_all_documents(documents) -> list of passage dicts
+
+----------------------------------------------------------------
+PHASE 3 — ENCODING (encoder.py)
+----------------------------------------------------------------
+
+STEP 3.1 — Build encoder.py (conventional version)
+  Goal: encode query and passages into dense vectors
+  Use: sentence-transformers library
+  Model to use: "all-MiniLM-L6-v2" (small, fast, good baseline)
+  
+  Functions to write:
+    load_encoder() -> encoder model
+    encode_query(query_string, encoder) -> vector (numpy array)
+    encode_passages(passage_list, encoder) -> list of vectors
+    encode_single_passage(passage_text, encoder) -> vector
+
+NOTE: This is the file you will replace with TRM later.
+      Keep encoding logic fully isolated here.
+
+----------------------------------------------------------------
+PHASE 4 — RETRIEVAL (retrieval.py)
+----------------------------------------------------------------
+
+STEP 4.1 — Build FAISS index
+  Goal: build searchable index from passage vectors
+  Input: list of passage vectors + list of passage dicts
+  Output: saved FAISS index to data/index/
+  
+  Functions to write:
+    build_faiss_index(passage_vectors) -> faiss index
+    save_index(index, path) -> None
+    load_index(path) -> faiss index
+
+STEP 4.2 — Build retrieval search
+  Goal: search index with query vector
+  Input: query vector, faiss index, passage dicts, top_k=100
+  Output: top 100 candidate passage dicts with retrieval scores
+  
+  Functions to write:
+    search(query_vector, index, passages, top_k=100)
+        -> list of (passage_dict, score) tuples
+
+----------------------------------------------------------------
+PHASE 5 — SCORING / RE-RANKING (scorer.py)
+----------------------------------------------------------------
+
+STEP 5.1 — Build scorer.py
+  Goal: re-rank candidate passages by relevance to query
+  Input: query vector, list of (passage_dict, score) tuples
+  Output: top 5 re-ranked passage dicts
+  
+  Scoring method: cosine similarity between
+  query vector and passage vector
+  
+  Functions to write:
+    cosine_similarity(vec1, vec2) -> float
+    score_passages(query_vector, candidate_passages) 
+        -> list of (passage_dict, score) sorted descending
+    get_top_k(scored_passages, k=5) -> list of passage dicts
+
+----------------------------------------------------------------
+PHASE 6 — READER / ANSWER EXTRACTION (reader.py)
+----------------------------------------------------------------
+
+STEP 6.1 — Build reader.py
+  Goal: extract answer span from top passages
+  Use: transformers pipeline for extractive QA
+  Model to use: "deepset/roberta-base-squad2"
+  
+  Input: query string, list of top 5 passage dicts
+  Output: answer string, source passage, confidence score
+  
+  Functions to write:
+    load_reader() -> reader pipeline
+    extract_answer(query, top_passages, reader)
+        -> dict containing:
+           answer: string
+           confidence: float
+           source_passage: string
+           source_document: string
+
+----------------------------------------------------------------
+PHASE 7 — MAIN PIPELINE (main.py)
+----------------------------------------------------------------
+
+STEP 7.1 — Build main.py
+  Goal: connect all components into one pipeline
+  
+  Flow:
+    1. Load all documents from data/documents/
+    2. Chunk documents into passages
+    3. Load encoder
+    4. Encode all passages -> passage vectors
+    5. Build FAISS index from passage vectors
+    6. Accept query from user (input prompt)
+    7. Encode query -> query vector
+    8. Retrieve top 100 candidate passages
+    9. Score and re-rank -> top 5 passages
+    10. Extract answer from top 5 passages
+    11. Print answer, source, confidence score
+  
+  Functions to write:
+    build_pipeline() -> sets up index and encoders
+    run_query(query_string) -> answer dict
+    main() -> runs build_pipeline then query loop
+
+----------------------------------------------------------------
+PHASE 8 — TESTING THE BASELINE
+----------------------------------------------------------------
+
+STEP 8.1 — Add test documents
+  Put 3-5 plain text .txt files in data/documents/
+  Use documents about topics you can ask clear questions about
+  Example: Wikipedia articles saved as .txt files
+
+STEP 8.2 — Run main.py and test
+  Ask 5-10 questions you know the answers to
+  Check that answers are correct and sourced correctly
+  Note any failures for debugging
+
+STEP 8.3 — Measure baseline performance
+  Add timing to each stage using metrics.py
+  Record:
+    - Time to encode query
+    - Time to retrieve candidates
+    - Time to score passages
+    - Time to extract answer
+    - Total end-to-end time
+    - Peak memory usage
+
+  Functions to write in metrics.py:
+    timer(stage_name) -> context manager that logs time
+    log_results(query, answer, timings) -> prints summary
+
+----------------------------------------------------------------
+PHASE 9 — DEMO INTERFACE (demo/app.py)
+----------------------------------------------------------------
+
+STEP 9.1 — Build Streamlit app
+  Goal: visual interface showing pipeline in real time
+  
+  UI components:
+    - File uploader (accepts .txt, .pdf, .docx)
+    - Text input box for query
+    - Pipeline trace showing each stage lighting up
+    - Timing display per stage
+    - Answer display with source passage highlighted
+    - Confidence score display
+  
+  Flow in app.py:
+    1. User uploads documents via file uploader
+    2. Documents saved to data/documents/
+    3. Pipeline builds index automatically
+    4. User types question
+    5. Each stage lights up as it runs
+    6. Answer displayed with source and confidence
+
+STEP 9.2 — Run demo
+  Run: streamlit run demo/app.py
+  Test with multiple documents and questions
+
+----------------------------------------------------------------
+PHASE 10 — SWAP ENCODER FOR TRM (trm/encoder.py)
+----------------------------------------------------------------
+
+NOTE: Only start this phase after Phase 1-9 are complete
+      and the baseline is working end to end.
+
+STEP 10.1 — Load TRM checkpoint
+  In trm/model.py:
+    Load arcprize/trm_arc_prize_verification from Hugging Face
+    Write wrapper to run TRM forward pass
+
+STEP 10.2 — Build TRM character grid encoder
+  In trm/encoder.py:
+    convert_to_grid(text) -> 2D character grid
+    run_trm_encoding(grid, trm_model) -> latent state vector
+    encode_query_trm(query_string) -> latent state vector
+    encode_passage_trm(passage_text, query_latent) -> latent state vector
+
+STEP 10.3 — Swap encoder.py to use TRM
+  Replace encode_query() and encode_passages() in pipeline/encoder.py
+  to call trm/encoder.py instead of sentence-transformers
+  Everything else in the pipeline stays the same
+
+STEP 10.4 — Re-index corpus with TRM
+  Re-run passage encoding with TRM encoder
+  Rebuild FAISS index with TRM latent states
+  Run same test queries and compare accuracy vs baseline
+
+STEP 10.5 — Benchmark TRM vs baseline
+  Record same metrics as Phase 8:
+    - Time per stage
+    - Memory usage
+    - Answer accuracy
+  Compare directly against baseline numbers
+
+----------------------------------------------------------------
+SUCCESS CRITERIA PER PHASE
+----------------------------------------------------------------
+
+Phase 1:  Folder structure created, dependencies installed
+Phase 2:  Documents load and chunk correctly, no errors
+Phase 3:  Query and passages encode to vectors successfully
+Phase 4:  FAISS index builds and returns results for a query
+Phase 5:  Passages are re-ranked correctly by relevance
+Phase 6:  Correct answer extracted from a known test question
+Phase 7:  Full pipeline runs end to end from question to answer
+Phase 8:  Baseline timing and accuracy numbers recorded
+Phase 9:  Streamlit demo runs, pipeline trace visible in UI
+Phase 10: TRM encoder swapped in, benchmarked vs baseline
+
+================================================================
+END OF BUILD STEPS
+================================================================

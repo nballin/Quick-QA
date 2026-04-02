@@ -1,0 +1,10 @@
+transformers
+torch
+faiss-cpu
+rank_bm25
+streamlit
+sentence-transformers
+PyPDF2
+python-docx
+numpy
+tqdm
