@@ -1,0 +1,134 @@
+Phase A — TRM text pipeline (QuickQA / trm_text)
+================================================
+
+This flowchart describes how the updated Phase A stack turns natural-language
+strings into dense vectors using the ARC TRM backbone + QA-specific adapters.
+
+
+                         +---------------------------+
+                         |  Query string  (raw text) |
+                         +---------------------------+
+                                      |
+                                      |  (parallel paths)
+                    +-----------------+------------------+
+                    |                                    |
+                    v                                    v
++---------------------------+              +---------------------------+
+| Query conditioning        |              | Passage string (raw text)|
+| CRC32 hash -> puzzle_id   |              +---------------------------+
+| in [0, num_puzzle_ids)    |                          |
+| (replaces ARC puzzle IDs) |                          v
++---------------------------+              +---------------------------+
+                    |                      | UTF-8 -> byte grid (H x W) |
+                    |                      | row-major fill; pad/trunc |
+                    |                      +---------------------------+
+                    |                                  |
+                    |                                  v
+                    |                      +---------------------------+
+                    |                      | Flatten -> length seq_len |
+                    |                      | (must match dataset.json) |
+                    |                      +---------------------------+
+                    |                                  |
+                    |                                  v
+                    |                      +---------------------------+
+                    |                      | Byte ids -> ARC vocab ids |
+                    |                      | deterministic remap OR    |
+                    |                      | LearnedByteToVocab       |
+                    |                      +---------------------------+
+                    |                                  |
+                    +------------------+---------------+
+                                       v
+                         +---------------------------+
+                         | TRM batch:                |
+                         |   inputs  (B, seq_len)    |
+                         |   puzzle_identifiers (B)  |
+                         +---------------------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         | TinyRecursiveModels TRM   |
+                         | (ACT wrapper + inner)     |
+                         | recursive L/H cycles,     |
+                         | halt_max_steps iterations |
+                         +---------------------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         | Forward hook on lm_head:  |
+                         | capture z_H (hidden state)|
+                         | before vocabulary logits  |
+                         +---------------------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         | Drop puzzle-emb prefix;   |
+                         | mean-pool over sequence   |
+                         | -> one vector per pair    |
+                         +---------------------------+
+                                       |
+                                       v
+                         +---------------------------+
+                         | Output: embedding (B, D)|
+                         | e.g. for FAISS / scorer / |
+                         | contrastive fine-tuning   |
+                         +---------------------------+
+
+
+Notes
+-----
+
+- The model never sees raw Python strings inside the net: strings are converted
+  to integer tensors (byte grid -> vocab ids) first.
+
+- ARC checkpoint + dataset.json must agree on seq_len, vocab_size, and
+  num_puzzle_identifiers.
+
+- Optional env TRM_ENCODE_MAX_STEPS (e.g. 1) shortens ACT iterations for CPU
+  smoke tests; full runs use the checkpoint halt budget.
+
+- Alternate baseline (not TRM): trm_text.TextGridEncoder maps the same byte
+  grid through a small CNN to a vector without loading ARC weights.
+
+- Good QA/retrieval quality still requires supervised training on your data;
+  Phase A only wires text -> TRM -> pooled embeddings.
+
+
+Term project goal (context)
+---------------------------
+
+The final system should accept natural-language input, interpret how each
+question is phrased (intent and wording), and use that to drive retrieval and
+answering. ARC TRM was trained on "puzzles" with a discrete puzzle identity;
+in QA, the analogue of a puzzle is the question itself: conditioning should
+eventually reflect the full query (and how it is asked), not only a hash bucket.
+
+
+Next steps
+----------
+
+What we still need to figure out and implement:
+
+- Query representation beyond hashing. CRC32 buckets are a placeholder. Decide
+  whether to use a small learned query embedding, concatenate query+passage in
+  the grid, cross-attention, or fine-tuned puzzle-embedding slots so the model
+  can use rich question context the way ARC used puzzle IDs.
+
+- Vocabulary bridge quality. The byte -> ARC-vocab remap is not semantically
+  aligned yet. Train LearnedByteToVocab (or a projection layer) on QA or
+  retrieval pairs so token inputs match useful supervision.
+
+- End-to-end QA stack. Wire these embeddings into the rest of the pipeline:
+  chunk documents, build FAISS (or hybrid BM25), re-rank, and add a reader or
+  span head so answers come from passages, not grid logits.
+
+- Data and fine-tuning. Curate or use a public QA/retrieval dataset; define
+  losses (contrastive for retrieval, span CE for extraction); run training
+  with realistic batch size and compute (GPU vs CPU limits for the term).
+
+- Evaluation. Define metrics (accuracy, EM/F1 on spans, retrieval recall@k)
+  and a small held-out set so improvements to "understanding the question" are
+  measurable.
+
+- Demo and scope. Lock what the term deliverable includes (e.g. notebook +
+  CLI + sample corpus) and document setup: checkpoint path, dataset.json, and
+  environment for reproducibility.
