@@ -1,0 +1,5 @@
+# Local clone of TRM (separate repo); use: git clone https://github.com/nballin/TinyRecursiveModels.git
+TinyRecursiveModels/
+
+__pycache__/
+*.py[cod]

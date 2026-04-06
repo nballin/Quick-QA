@@ -92,3 +92,48 @@ Takes the top-k passage latent states and extracts the final answer. In your arc
 The output returned to the user — either an extracted text span pointing directly to where in the passage the answer was found, or a short generated response depending on which reader type you choose.
 
 Want to start sketching the implementation plan for any specific box?
+
+
+
+
+Phase A — TRM “fully functioning” as in the upstream repo
+Do this inside QuickQA/TinyRecursiveModels (or work from a separate clone).
+
+Python environment
+Use Python 3.10 (or what their README states), not necessarily 3.14. Create a venv and cd into TinyRecursiveModels.
+
+Install PyTorch
+Match their README: CUDA build if you have an NVIDIA GPU; on Mac you use the CPU/MPS build they support. Then:
+
+pip install -r requirements.txt
+Plus their note: pip install --no-cache-dir --no-build-isolation adam-atan2
+(and wandb login only if you want logging).
+
+Download the verification checkpoint
+From that repo:
+
+python -m experiments.fetch_hf_checkpoints --repo_id arcprize/trm_arc_prize_verification --dest checkpoints/hf_trm
+
+Use the printed step_... path as load_checkpoint=... for eval (as in their README).
+
+Build ARC data locally (licensed data — you generate it, you don’t commit raw ARC files):
+
+python -m experiments.prepare_arc_datasets
+(or follow their dataset.build_arc_dataset / Modal flow if you use Modal.)
+
+Run evaluation (the command block in their README), e.g. experiments.run_exp1 with the right data_paths, load_checkpoint, and arch=trm overrides.
+
+When that runs end-to-end, TRM is “fully functioning” in the sense the authors intend: load weights, run on ARC data, get metrics.
+
+
+
+Phase B — TRM inside QuickQA as a QA system
+To have the model matter for your RAG/QA app, you still need to:
+
+Finish the baseline pipeline in QuickQA (pseudoCode.txt): ingestion → chunker → sentence-transformer encoder → FAISS → scorer → reader. That gives you a working QA product without TRM.
+
+Isolate encoding in encoder.py (as the brief says) so you can swap implementations.
+
+TRM integration (later): define how text becomes TRM inputs (e.g. character/byte grid, length limits) and what you take as the query/passage vector (e.g. pooled latent). That almost certainly needs fine-tuning or a small adapter on QA or retrieval data; the ARC checkpoint alone will not behave like a text retriever.
+
+Optional hygiene: add TinyRecursiveModels as a git submodule in Quick-QA so the TRM revision is pinned, or keep it as a separate clone and document the path in your README.

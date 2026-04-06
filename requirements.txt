@@ -8,3 +8,5 @@ PyPDF2
 python-docx
 numpy
 tqdm
+pyyaml
+einops
