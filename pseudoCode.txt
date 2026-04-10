@@ -1,45 +1,112 @@
-trm_qa_system/
+QuickQA/  (current layout — rough)
 │
-├── main.py                  # entry point, runs the full pipeline
+├── main.py                  # CLI: ingest | query | eval
+├── config.yaml              # encoder, paths, retrieval, reader
 │
 ├── pipeline/
-│   ├── ingestion.py         # loads and chunks input documents
-│   ├── retrieval.py         # builds index, searches corpus
-│   ├── encoder.py           # encodes query and passages
-│   ├── scorer.py            # re-ranks candidate passages
-│   ├── reader.py            # extracts final answer
+│   ├── ingestion.py         # load docs (.txt/.pdf/.docx) or SQuAD fallback
+│   ├── chunker.py           # split into chunks
+│   ├── index.py             # FAISS + passage store + BM25
+│   ├── retrieval.py         # hybrid dense + BM25 (RRF)
+│   ├── encoder.py             # MiniLM (default); TRM/CNN stubs
+│   ├── scorer.py            # re-rank top candidates
+│   ├── reader.py            # extractive QA (e.g. RoBERTa SQuAD2)
 │
-├── trm/
-│   ├── model.py             # TRM model loading and inference
-│   ├── encoder.py           # TRM-specific encoding logic (step 4+)
+├── trm_text/                # Phase A TRM text encoder (ARC checkpoint, byte grids)
+│   ├── trm_arc_adapter.py   # load TRM, encode pairs → vectors
+│   ├── representation.py    # UTF-8 → byte grid
+│   ├── query_conditioning.py
+│   ├── vocab_bridge.py
+│   └── grid_encoder.py      # optional CNN baseline
 │
-├── demo/
-│   ├── app.py               # Streamlit demo interface
-│
-├── utils/
-│   ├── chunker.py           # splits documents into passages
-│   ├── metrics.py           # evaluation and timing functions
-│
-├── data/
-│   ├── documents/           # user uploaded documents go here
-│   ├── index/               # saved FAISS index goes here
-│
-├── requirements.txt         # all dependencies
-└── README.md                # project documentation
+├── corpus/                  # user documents
+├── index/                   # FAISS index + passages.jsonl
+├── evaluate.py              # SQuAD EM/F1, recall@k
+├── requirements.txt
+└── (flowcharts / notes: Phase A flowchart.txt, etc.)
 
 
-main.py
-  → ingestion.py    (load documents)
-  → chunker.py      (split into passages)
-  → retrieval.py    (build index, search)
-  → encoder.py      (encode query + passages)
-  → scorer.py       (re-rank)
-  → reader.py       (extract answer)
-  → back to main.py (return answer)
+main.py (query path)
+  → load_index + encoder
+  → Retriever (FAISS + optional BM25)
+  → Scorer (re-rank)
+  → Reader (answer span)
+  → print answer + source
 
 
-  ================================================================
-TRM QA SYSTEM — STRUCTURED BUILD STEPS
+================================================================
+PROJECT ROADMAP — PHASE A, B, C, … (simple terms)
+================================================================
+
+How we go forward from here: each phase builds on the last. You can run a
+working QA stack today (MiniLM); TRM is the research track layered on top.
+
+----------------------------------------------------------------
+PHASE A — Text → vectors with TRM (encoder only)
+----------------------------------------------------------------
+What:  Turn raw text into dense embeddings using the ARC Tiny Recursive Model:
+       byte grid → vocab bridge → TRM forward → pool hidden states (see
+       Phase A flowchart.txt). Query text feeds "puzzle id" conditioning
+       (today: CRC32 hash bucket).
+Why:   This is the replacement for MiniLM inside the encoder slot — same output
+       shape the rest of the pipeline expects: one vector per query and per
+       passage (or per query–passage pair, depending on how we wire it).
+Done:  Core logic in trm_text/ (adapter, grids, hook, pooling).
+Next:  Finish plumbing: pipeline/encoder.py TRM backend calls TrmArcTextEncoder,
+       plus config keys (checkpoint path, dataset.json, TinyRecursiveModels root).
+
+----------------------------------------------------------------
+PHASE B — TRM inside the full RAG loop
+----------------------------------------------------------------
+What:  Ingest and index passages with TRM embeddings; at query time encode
+       the question, retrieve with FAISS, keep hybrid BM25 if useful, re-rank,
+       then run the same reader on text spans.
+Why:  Phase A alone doesn't answer questions — retrieval + reader complete the
+       story.
+Next:  Rebuild index after swapping encoder; sanity-check latency and memory;
+       compare retrieval quality vs MiniLM on the same corpus.
+
+----------------------------------------------------------------
+PHASE C — Smarter query conditioning (not just a hash)
+----------------------------------------------------------------
+What:  Replace or enrich CRC32 puzzle buckets so the model sees *how* the
+       question is asked — e.g. learned query vector, shared query+passage grid,
+       or fine-tuned puzzle-embedding usage.
+Why:  ARC used real puzzle IDs; QA needs question semantics, not a random bucket.
+Next:  Pick one approach; small experiments before heavy training.
+
+----------------------------------------------------------------
+PHASE D — Train / adapt on QA or retrieval data
+----------------------------------------------------------------
+What:  Supervision: contrastive or metric learning (query ↔ relevant passage),
+       maybe train LearnedByteToVocab or light TRM layers; optional reader
+       fine-tuning on your domain.
+Why:  ARC weights + naive byte remap are a starting point, not the final word
+       on open-domain QA.
+Next:  Use trm_text/train_contrastive.py or similar; define batches and losses.
+
+----------------------------------------------------------------
+PHASE E — Evaluation, demo, write-up
+----------------------------------------------------------------
+What:  Fixed benchmarks (SQuAD eval already in evaluate.py; add retrieval
+       recall@k, timing); optional Streamlit or polished CLI; document how to
+       reproduce (env vars, checkpoint, dataset.json).
+Why:  Prove improvements and ship a defensible term deliverable.
+
+----------------------------------------------------------------
+PHASE F — Stretch / polish
+----------------------------------------------------------------
+What:  CNN grid encoder vs full TRM ablation; retrieval tuning (weights, k);
+       faster CPU paths; clean packaging and README.
+Why:  Nice-to-have once the core story works.
+
+----------------------------------------------------------------
+Note: The numbered "PHASE 1–10" section below is an older step-by-step build
+plan. The lettered roadmap (A–F) above matches the current repo and intent.
+
+
+================================================================
+TRM QA SYSTEM — STRUCTURED BUILD STEPS (legacy numbered plan)
 ================================================================
 
 ----------------------------------------------------------------

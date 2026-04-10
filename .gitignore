@@ -3,3 +3,9 @@ TinyRecursiveModels/
 
 __pycache__/
 *.py[cod]
+
+eval_results.json
+eval_results_full.json
+
+# FAISS index + passage store (rebuild with: python main.py ingest)
+index/

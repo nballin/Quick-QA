@@ -1,0 +1,26 @@
+QuickQA — progress so far (simple notes)
+========================================
+
+What works end-to-end (default stack)
+-------------------------------------
+• CLI: ingest → build index → query → optional SQuAD eval (`main.py`, `config.yaml`).
+• Encoder: SentenceTransformers MiniLM (`all-MiniLM-L6-v2`) — swap via `encoder.backend` in config.
+• Corpus: `.txt` / `.pdf` / `.docx` under `corpus/`; if empty, falls back to SQuAD passages for ingest.
+• Chunking: size/overlap/sentence split (`pipeline/chunker.py`).
+• Retrieval: FAISS dense + BM25 hybrid with RRF fusion (`pipeline/retrieval.py`).
+• Re-ranking: cross-encoder style scoring on top candidates (`pipeline/scorer.py`).
+• Reading: RoBERTa SQuAD2 extractive answers (`pipeline/reader.py`).
+• Evaluation: EM, F1, recall@k on SQuAD validation (`evaluate.py`).
+
+Phase A / TRM text path (research code — not the default CLI encoder)
+---------------------------------------------------------------------
+• `trm_text/`: load ARC TRM checkpoint, UTF-8 byte grids, CRC32→puzzle-id conditioning,
+  vocab bridge (deterministic or learned hook), forward hook on `lm_head`, mean-pool → embeddings.
+• Documented in `Phase A flowchart.txt`; CNN baseline stub in `trm_text/grid_encoder.py`.
+• `pipeline/encoder.py`: `TRMEncoder` and `CNNEncoder` are placeholders — not connected to
+  `TrmArcTextEncoder` yet; using `backend: "trm"` would still raise NotImplementedError.
+
+Still open / next wiring
+------------------------
+• Plug TRM (or CNN surrogate) into `build_encoder` + config paths (checkpoint, `dataset.json`, TRM root).
+• Richer query conditioning than CRC32 buckets; optional training (`trm_text/train_contrastive.py` exists).

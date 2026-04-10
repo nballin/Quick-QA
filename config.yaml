@@ -1,0 +1,38 @@
+# Encoder — swap TRM by setting backend: "trm" after implementing TRMEncoder.encode()
+encoder:
+  backend: "minilm"
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  device: "cpu"
+  batch_size: 32
+
+chunker:
+  chunk_size: 300
+  chunk_overlap: 50
+  split_by: "sentence"
+
+retrieval:
+  top_k_faiss: 100
+  top_k_bm25: 100
+  use_bm25_hybrid: true
+  bm25_weight: 0.3
+  faiss_weight: 0.7
+
+scorer:
+  top_k_rerank: 5
+
+reader:
+  model_name: "deepset/roberta-base-squad2"
+  device: "cpu"
+  max_answer_length: 50
+
+paths:
+  corpus_dir: "corpus"
+  index_dir: "index"
+  faiss_index: "index/passages.index"
+  passage_store: "index/passages.jsonl"
+
+evaluation:
+  dataset: "squad"
+  squad_split: "validation"
+  eval_k: [1, 5, 10]
+  num_eval_samples: 500
