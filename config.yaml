@@ -1,9 +1,12 @@
-# Encoder — swap TRM by setting backend: "trm" after implementing TRMEncoder.encode()
 encoder:
-  backend: "minilm"
+  backend: "minilm"          # "minilm" | "trm" | "cnn"
   model_name: "sentence-transformers/all-MiniLM-L6-v2"
   device: "cpu"
   batch_size: 32
+  # TRM-specific (used when backend: "trm")
+  trm_checkpoint: ""         # path to .pt checkpoint file
+  trm_dataset_json: "trm_text/fixtures/example_arc_dataset.json"
+  trm_root: "TinyRecursiveModels"
 
 chunker:
   chunk_size: 300

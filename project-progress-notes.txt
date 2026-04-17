@@ -8,19 +8,40 @@ What works end-to-end (default stack)
 • Corpus: `.txt` / `.pdf` / `.docx` under `corpus/`; if empty, falls back to SQuAD passages for ingest.
 • Chunking: size/overlap/sentence split (`pipeline/chunker.py`).
 • Retrieval: FAISS dense + BM25 hybrid with RRF fusion (`pipeline/retrieval.py`).
-• Re-ranking: cross-encoder style scoring on top candidates (`pipeline/scorer.py`).
+• Re-ranking: cosine similarity scoring on top candidates (`pipeline/scorer.py`).
 • Reading: RoBERTa SQuAD2 extractive answers (`pipeline/reader.py`).
 • Evaluation: EM, F1, recall@k on SQuAD validation (`evaluate.py`).
 
-Phase A / TRM text path (research code — not the default CLI encoder)
----------------------------------------------------------------------
-• `trm_text/`: load ARC TRM checkpoint, UTF-8 byte grids, CRC32→puzzle-id conditioning,
-  vocab bridge (deterministic or learned hook), forward hook on `lm_head`, mean-pool → embeddings.
+Phase A — TRM text path (trm_text/)
+-------------------------------------
+• Load ARC TRM checkpoint (`load_trm_actv1`), UTF-8 byte grids, CRC32 -> puzzle-id conditioning,
+  vocab bridge (deterministic or learned), forward hook on `lm_head`, mean-pool -> embeddings.
 • Documented in `Phase A flowchart.txt`; CNN baseline stub in `trm_text/grid_encoder.py`.
-• `pipeline/encoder.py`: `TRMEncoder` and `CNNEncoder` are placeholders — not connected to
-  `TrmArcTextEncoder` yet; using `backend: "trm"` would still raise NotImplementedError.
 
-Still open / next wiring
+Phase B — TRM wired into the pipeline  [DONE]
+----------------------------------------------
+• `pipeline/encoder.py`: `TRMEncoder` is now fully implemented.
+  - `__init__`: calls `build_encoder_from_paths(checkpoint, dataset_json, trm_root)`; reads
+    `hidden_size` from `trm.config.hidden_size` for `embedding_dim`.
+  - `encode(texts)`: batches texts through `encode_text_pairs(passages=texts, queries=texts)`
+    (self-conditioning — CRC32 of each text is its own puzzle_id); L2-normalizes output.
+  - `**_kwargs` absorbs unused keys (e.g. `model_name`) so the same call works for any backend.
+
+• `config.yaml`: three new keys added under `encoder`:
+    trm_checkpoint:   ""   (fill in path to .pt file)
+    trm_dataset_json: trm_text/fixtures/example_arc_dataset.json
+    trm_root:         TinyRecursiveModels
+
+• `main.py`: both `build_encoder` calls now pass `**{k: v for k, v in enc_cfg.items() if k != "backend"}`
+  so TRM-specific keys flow through without hardcoding.
+
+• To activate TRM: set `backend: "trm"` and `trm_checkpoint: <path>` in config.yaml,
+  then `python main.py ingest` + `python main.py query "..."`.
+
+Still open / next steps
 ------------------------
-• Plug TRM (or CNN surrogate) into `build_encoder` + config paths (checkpoint, `dataset.json`, TRM root).
-• Richer query conditioning than CRC32 buckets; optional training (`trm_text/train_contrastive.py` exists).
+• Obtain real ARC checkpoint + matching dataset.json; test TRM end-to-end.
+• Query conditioning: replace CRC32 placeholder with richer query embedding (Phase C).
+• Vocabulary bridge: train LearnedByteToVocab on QA pairs for semantic alignment.
+• Fine-tuning: contrastive training on (query, pos, neg) SQuAD triplets (`trm_text/train_contrastive.py`).
+• Benchmarking: EM/F1/Recall@k + latency/memory comparison vs MiniLM (Phase E).

@@ -1,0 +1,155 @@
+TRM / RAG Pipeline Flowchart — Phase B (TRM wired into pipeline)
+=================================================================
+
+BACKEND SWITCH (config.yaml)
+-----------------------------
+encoder.backend: "minilm"  →  SentenceTransformers (baseline, fully working)
+encoder.backend: "trm"     →  TRM path below (Phase B, now wired)
+
+
+INGEST / INDEX-BUILD PATH  (python main.py ingest)
+--------------------------------------------------
+
++-----------------------------+
+| Corpus (.txt / .pdf / .docx)|
+| or SQuAD passages (fallback)|
++-----------------------------+
+               |
+               v
++-----------------------------+
+| Chunker                     |
+| 300-word chunks, 50 overlap |
+| sentence-aware split        |
++-----------------------------+
+               |
+               v
++--------------------------------------------+
+| TRMEncoder.encode(passage_texts)           |
+|                                            |
+|  for each mini-batch (size = batch_size):  |
+|    +---------------------------------+     |
+|    | UTF-8 -> byte grid (H x W)     |     |
+|    | flatten -> seq_len ints        |     |
+|    | byte ids -> ARC vocab ids      |     |
+|    |   (deterministic remap)        |     |
+|    +---------------------------------+     |
+|    +---------------------------------+     |
+|    | puzzle_id = CRC32(passage_text)|     |  <- self-conditioning:
+|    | (passage is its own "query")   |     |     no query available
+|    +---------------------------------+     |     at index time
+|    +---------------------------------+     |
+|    | TRM forward (ACT, max steps)   |     |
+|    | hook on lm_head -> hidden z    |     |
+|    | drop puzzle-emb prefix         |     |
+|    | mean-pool -> (batch, hidden_D) |     |
+|    +---------------------------------+     |
+|    +---------------------------------+     |
+|    | L2-normalize                   |     |
+|    +---------------------------------+     |
++--------------------------------------------+
+               |
+               | (N, D) float32 embeddings
+               v
++-----------------------------+
+| FAISS flat index            |
+| BM25 keyword index          |
+| passages.jsonl store        |
++-----------------------------+
+
+
+QUERY PATH  (python main.py query "question")
+---------------------------------------------
+
++-----------------------------+
+| User query (raw text)       |
++-----------------------------+
+               |
+               v
++--------------------------------------------+
+| TRMEncoder.encode([query_text])            |
+| (same path as above; CRC32(query) = id)    |
++--------------------------------------------+
+               |
+               | (1, D) query embedding
+               v
++-----------------------------+
+| Retriever (hybrid)          |
+| FAISS top-100 (dense)       |  RRF fusion
+| BM25  top-100 (keyword)  ---+
+| -> ~100 candidate passages  |
++-----------------------------+
+               |
+               v
++-----------------------------+
+| Scorer (cosine re-rank)     |
+| encode candidates again     |
+| rank by sim(query, passage) |
+| -> top-5 passages           |
++-----------------------------+
+               |
+               v
++-----------------------------+
+| RoBERTa Reader              |
+| (deepset/roberta-base-squad2|
+| extractive span prediction) |
++-----------------------------+
+               |
+               v
++-----------------------------+
+| Answer + confidence score   |
++-----------------------------+
+
+
+PHASE A -> PHASE B WIRING DETAIL
+---------------------------------
+
+Phase A built (trm_text/):                Phase B added (pipeline/):
+  TrmArcTextEncoder                   -->   TRMEncoder.__init__
+  build_encoder_from_paths()          -->     calls build_encoder_from_paths()
+  encode_text_pairs(passages, queries) -->    encode() loops in mini-batches
+  trm.config.hidden_size              -->   TRMEncoder.embedding_dim
+
+config.yaml (new keys under encoder):
+  trm_checkpoint:   path to .pt file
+  trm_dataset_json: trm_text/fixtures/example_arc_dataset.json
+  trm_root:         TinyRecursiveModels/
+
+build_encoder() in encoder.py:
+  backend="trm"  ->  reads trm_checkpoint, trm_dataset_json, trm_root from kwargs
+  backend="minilm" -> unchanged
+
+
+WHAT STILL NEEDS A REAL CHECKPOINT
+------------------------------------
+
+The fixture dataset.json has vocab_size=12, seq_len=900 (ARC defaults).
+To run with a real TRM checkpoint you need:
+
+1. Download checkpoint:
+   python -m experiments.fetch_hf_checkpoints \
+     --repo_id arcprize/trm_arc_prize_verification \
+     --dest checkpoints/hf_trm
+   (run from inside TinyRecursiveModels/)
+
+2. Set in config.yaml:
+   trm_checkpoint: "TinyRecursiveModels/checkpoints/hf_trm/step_XXXXX/model.pt"
+   trm_dataset_json: "<path>/dataset.json"  # from the ARC build step
+
+3. Switch backend:
+   backend: "trm"
+
+4. Re-ingest and test:
+   python main.py ingest
+   python main.py query "What is the capital of France?"
+
+
+OPEN ITEMS (Phase C+)
+----------------------
+- Query conditioning: CRC32 is a placeholder hash bucket; replace with
+  richer query embedding (learned slots, cross-attention, or query+passage
+  in a shared grid) so TRM sees actual question semantics.
+- Vocabulary bridge: train LearnedByteToVocab on QA pairs for semantic
+  alignment; currently uses deterministic remap.
+- Fine-tuning: use train_contrastive.py (InfoNCE) on (query, pos, neg)
+  triplets from SQuAD to improve retrieval quality.
+- Benchmarking: side-by-side EM/F1/Recall@k and latency/memory vs MiniLM.

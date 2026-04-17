@@ -90,8 +90,7 @@ def cmd_ingest(config_path: Path, verbose: bool) -> None:
     enc_cfg = cfg["encoder"]
     encoder = build_encoder(
         enc_cfg["backend"],
-        model_name=enc_cfg["model_name"],
-        device=enc_cfg["device"],
+        **{k: v for k, v in enc_cfg.items() if k != "backend"},
     )
     build_index(chunks, encoder, cfg)
     dim = encoder.embedding_dim
@@ -116,8 +115,7 @@ def cmd_query(config_path: Path, query: str, verbose: bool) -> None:
     enc_cfg = cfg["encoder"]
     encoder = build_encoder(
         enc_cfg["backend"],
-        model_name=enc_cfg["model_name"],
-        device=enc_cfg["device"],
+        **{k: v for k, v in enc_cfg.items() if k != "backend"},
     )
     retriever = Retriever(
         faiss_idx,

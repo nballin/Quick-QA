@@ -1,0 +1,384 @@
+================================================================================
+CLAUSE MEETING — COMPLETE PROJECT BRIEF FOR ADVISOR / LLM CONTEXT
+================================================================================
+Purpose of this document
+------------------------
+This file is a standalone, maximum-detail outline of the Quick-QA / TRM text
+project. It is meant to be pasted into Claude (or given to a human advisor)
+so they can recommend concrete next steps without missing background.
+
+Repository: Quick-QA (GitHub: nballin/Quick-QA). Related upstream: TinyRecursive
+Models fork (nballin/TinyRecursiveModels), used locally but not vendored in git.
+
+Last context: term-project trajectory — build a question-answering system that
+uses a Tiny Recursive Model (TRM) instead of conventional subword tokenization
+for encoding, motivated by speed, memory, and representation quality claims
+from ARC-AGI TRM research.
+
+
+================================================================================
+1. ELEVATOR PITCH (WHAT THIS PROJECT IS)
+================================================================================
+
+Quick-QA is a research-leaning codebase that explores replacing BPE/WordPiece
+style tokenization in a RAG-style QA pipeline with a Tiny Recursive Model.
+The long-term product is: user asks a natural-language question → system
+retrieves relevant passages from a corpus → scores / re-ranks → extracts an
+answer — with query and passage *encoding* driven by TRM-style latent reasoning
+instead of a large autoregressive LLM tokenizer.
+
+The public TRM weights available today were trained on ARC *puzzle grids*, not
+on Wikipedia or SQuAD. So the project has two layers:
+
+  (A) Engineering: represent text as tensors TRM can consume, load checkpoints,
+      and produce embeddings for retrieval.
+  (B) Research / training: align those representations with QA semantics via
+      fine-tuning, better query conditioning, and a full pipeline (reader,
+      metrics).
+
+Phase A (completed in-repo) focuses on (A): wiring text → TRM → pooled vectors.
+The baseline RAG pipeline described in pseudoCode.txt (ingestion, FAISS,
+sentence-transformers encoder, reader) is largely still a *plan*, not fully
+implemented as runnable code.
+
+
+================================================================================
+2. MOTIVATION (WHY NOT STANDARD TOKENIZATION + LLM)
+================================================================================
+
+Stated motivations (from project brief and README):
+
+- Subword tokenization (BPE, WordPiece) adds vocabulary size, sequence length,
+  and compute; TRM research reports favorable throughput and memory vs 8B-class
+  LLM baselines on comparable tasks.
+- TRM applies a small recurrent reasoning module over a latent state, which may
+  yield representations that are useful for retrieval without a full LLM
+  forward pass for every token.
+- The team hypothesis: replace the *encoder* role in RAG with TRM-derived
+  vectors, keep the rest of the pipeline (chunk retrieval, optional small
+  reader) comparatively lightweight.
+
+Important caveats:
+
+- ARC TRM is not pretrained on open-domain text QA; transfer requires adaptation.
+- "Understanding how a question is asked" in NLP terms is not solved by
+  porting a puzzle solver; it requires supervision or architectural choices
+  that preserve query semantics (see Section 6).
+
+
+================================================================================
+3. TARGET SYSTEM ARCHITECTURE (INTENDED END STATE)
+================================================================================
+
+Intended pipeline (high level, from trm-rag-pipeline-flowchart.txt and
+pseudoCode.txt):
+
+  User query (raw text)
+       → TRM query encoder (or baseline MiniLM encoder)
+       → Retrieval (BM25 and/or FAISS on passage vectors)
+       → Candidate passages (raw text)
+       → TRM passage encoder (query-conditioned in the design doc)
+       → Lightweight scorer / re-ranker (cosine or small head)
+       → Top-k passages
+       → Reader / answer extractor (e.g. extractive QA model)
+       → Final answer + source + confidence
+
+The design document explicitly separates:
+- a *conventional* encoder path (sentence-transformers) for a working baseline
+- a *TRM* path that replaces tokenization with spatial / recursive encoding
+
+Phase A work only implements pieces of the TRM path and a surrogate CNN
+encoder; it does not yet implement ingestion, FAISS index build, or reader.
+
+
+================================================================================
+4. WHAT EXISTS IN THE REPOSITORY RIGHT NOW
+================================================================================
+
+4.1 Tracked files (representative)
+----------------------------------
+- README.md — short project description.
+- pseudoCode.txt — full project brief: folder layout, phased build steps
+  (PHASE 1–8), TRM background, BPE explanation, pipeline pseudocode.
+- requirements.txt — Python deps including torch, transformers, faiss-cpu,
+  sentence-transformers, rank_bm25, streamlit, PyPDF2, python-docx, numpy,
+  tqdm, pyyaml, einops (for TRM imports).
+- trm-rag-pipeline-flowchart.txt — ASCII pipeline diagram of the full system.
+- Phase A flowchart.txt — Phase A–specific flow (text → TRM → embedding) plus
+  notes and "next steps" for the term.
+- .gitignore — ignores local TinyRecursiveModels/ clone and __pycache__.
+
+4.2 Package: trm_text/
+----------------------
+This is the concrete Phase A implementation.
+
+- representation.py
+  - TextGridConfig: height × width grid (default 32×64).
+  - UTF-8 text → fixed 2D grid of integer ids: pad_id=0, bytes mapped to
+    ids 1..256 (byte value + 1).
+  - texts_to_batch, concat_query_passage_grids helpers.
+
+- vocab_bridge.py
+  - remap_bytes_deterministic: maps byte-level ids into ARC vocabulary range
+    [0, vocab_size) without training (placeholder semantics).
+  - LearnedByteToVocab: optional nn.Parameter logits (257 × vocab_size) for
+    future fine-tuning.
+
+- query_conditioning.py
+  - query_to_puzzle_id / batch_query_puzzle_ids: CRC32 hash of UTF-8 query
+    string, modulo num_puzzle_identifiers. This replaces ARC's discrete
+    puzzle-ID embedding index with a *bucketed* signal derived from the
+    question text. It is NOT a full semantic embedding of the query.
+
+- grid_encoder.py
+  - TextGridEncoder: embedding + shallow CNN + GAP + linear → L2-normalized
+    vectors. Trainable surrogate when TRM checkpoint is not used or for
+    ablations.
+
+- trm_arc_adapter.py
+  - Loads ARC dataset metadata from dataset.json (seq_len, vocab_size,
+    pad_id, num_puzzle_identifiers).
+  - Reads TinyRecursiveModels/config/arch/trm.yaml, resolves Hydra-style
+    puzzle_emb_ndim: ${.hidden_size} to numeric hidden_size.
+  - Builds TinyRecursiveReasoningModel_ACTV1 with merged config.
+  - Normalizes checkpoint state_dict keys (strip model._orig_mod. prefixes,
+    ensure inner.* keys) and loads weights.
+  - TrmArcTextEncoder: given parallel lists of passage strings and query
+    strings, builds batch, runs TRM ACT loop, registers forward hook on
+    inner.lm_head to capture hidden states z_H before vocabulary logits,
+    strips puzzle-embedding prefix positions, mean-pools over sequence →
+    one vector per (query, passage) pair.
+  - Environment variable TRM_ENCODE_MAX_STEPS: caps ACT iterations (e.g. 1 for
+    CPU smoke tests); full runs use halt_max_steps from config (typically 16).
+
+- hooks.py
+  - load_trm_from_arc_checkpoint(...): convenience wrapper around
+    build_encoder_from_paths; uses default fixture dataset.json if none passed.
+
+- train_contrastive.py
+  - batch_contrastive_loss: symmetric InfoNCE-style loss for paired embeddings
+    (stub for future retrieval training).
+
+- fixtures/example_arc_dataset.json
+  - Example metadata: seq_len 900, vocab_size 12, num_puzzle_identifiers 8192,
+    matching typical ARC-style flattened 30×30 grids. Real runs must use the
+    dataset.json that matches the checkpoint you load.
+
+4.3 NOT in git (by design)
+--------------------------
+- TinyRecursiveModels/ — local clone of the TRM research codebase (fork of
+  SamsungSAILMontreal / AntonioRoye). Listed in .gitignore. Required on disk
+  for imports and config/arch/trm.yaml when loading TRM.
+
+4.4 Not implemented as runnable pipeline (per pseudoCode)
+-------------------------------------------------------
+- pipeline/ingestion.py, chunker, retrieval.py, scorer.py, reader.py, main.py
+  as described in pseudoCode — not present as a complete integrated app.
+- Phase 2–7 from pseudoCode remain future work unless added elsewhere.
+
+
+================================================================================
+5. HOW THE MODEL WORKS *CURRENTLY* (DETAILED TECHNICAL WALKTHROUGH)
+================================================================================
+
+5.1 What "the model" refers to
+------------------------------
+There are two encoders in scope:
+
+  (1) TRM path (Arc checkpoint): Tiny Recursive Model from TinyRecursiveModels,
+      pretrained on ARC tasks, adapted for text via byte grids + remapping.
+
+  (2) Surrogate path: TextGridEncoder (CNN on byte grid) — no ARC weights.
+
+This section focuses on (1) because it is the research core.
+
+5.2 Original TRM (ARC) vs our usage
+-----------------------------------
+In ARC training, each example is a flattened grid of discrete symbols with a
+small vocabulary (colors / digits per dataset build), plus a puzzle identifier
+embedding that conditions the model on which puzzle family is being solved.
+The inner model recursively updates latent states (H/L cycles) and produces
+logits over the vocabulary for the output grid; an ACT wrapper can run up to
+halt_max_steps iterations.
+
+We reuse the same architecture and weights but:
+- Inputs are derived from *passage text* (UTF-8 bytes), not ARC grids.
+- Puzzle IDs are derived from *query text* via hashing, not ARC's puzzle table.
+
+So the forward pass is structurally identical to evaluation code in the TRM
+repo, but the *semantic* mapping from English to token ids is arbitrary unless
+fine-tuned.
+
+5.3 Step-by-step: from strings to embedding vector
+--------------------------------------------------
+Step 1 — Input
+  - Caller provides pairs: passage_strings[i], query_strings[i] (same length).
+
+Step 2 — Passage → byte grid
+  - Each passage is encoded to UTF-8 bytes, packed row-major into H×W grid.
+  - Truncation: if bytes exceed H×W, excess is dropped. Padding: unused cells
+    hold pad_id (0 in our representation layer before remap; mapping to ARC
+    pad follows metadata).
+
+Step 3 — Flatten to seq_len
+  - Grid is reshaped to length seq_len. seq_len MUST match dataset.json used
+    with the checkpoint (ARC often uses 900 = 30×30).
+
+Step 4 — Byte ids → ARC vocabulary ids
+  - remap_bytes_deterministic spreads non-pad values across 1..vocab_size-1
+    by modulo arithmetic. This is not linguistically meaningful; it only
+    satisfies tensor shape and dtype requirements.
+  - Optional LearnedByteToVocab could be trained to improve alignment.
+
+Step 5 — Query → puzzle_identifiers
+  - Each query string is hashed (CRC32) to an integer in
+    [0, num_puzzle_identifiers). This selects a row in the sparse puzzle
+    embedding table (CastedSparseEmbedding in TRM), analogous to ARC puzzle ID
+    but with heavy collision and no semantic training.
+
+Step 6 — Batch dict
+  - inputs: int32 tensor (batch, seq_len)
+  - puzzle_identifiers: int32 (batch,)
+
+Step 7 — TRM ACT forward
+  - TinyRecursiveReasoningModel_ACTV1 maintains carry state; in eval mode
+    halting is driven by step count vs halt_max_steps unless modified.
+  - Inner network applies recursive L/H blocks; puzzle embeddings are
+    prepended to the sequence (puzzle_emb_len positions, e.g. 16).
+
+Step 8 — Hidden state capture
+  - A forward hook on inner.lm_head records the input tensor to the linear
+    head (z_H before logits). This is the representation used for downstream
+    tasks instead of the ARC grid logits.
+
+Step 9 — Pooling
+  - Positions corresponding to puzzle prefix are removed; remaining token
+    positions are mean-pooled over the sequence dimension → dimension
+    hidden_size (e.g. 512).
+
+Step 10 — Output
+  - Tensor of shape (batch, hidden_size), dtype often bfloat16 (model config).
+  - Intended consumers: FAISS indexing, cosine re-ranking, contrastive loss
+    training — not yet wired in-repo.
+
+5.4 What the model does *not* do yet
+------------------------------------
+- It does not parse questions into intent, entities, or answer type.
+- It does not guarantee that similar questions get similar embeddings (hash
+  buckets are coarse).
+- It does not produce span or free-text answers by itself; lm_head logits are
+  over ARC vocab, not natural language generation for QA.
+- End-to-end QA (retrieve → read) is not connected to this encoder in code.
+
+
+================================================================================
+6. GOALS (TERM PROJECT + RESEARCH)
+================================================================================
+
+6.1 Stated goal
+----------------
+Deliver a system that takes text questions, respects *how* the question is
+phrased (wording / intent), and answers using a corpus — with TRM as the
+core representation mechanism instead of classical LLM tokenization.
+
+6.2 Mapping from ARC "puzzle" to QA "question"
+----------------------------------------------
+In ARC, puzzle identity is a strong conditioning signal (paper ablations show
+removing it breaks performance). In QA, the natural analogue is the *query*
+itself: the model should condition on rich query information, not only a
+hash bucket.
+
+6.3 Gap between goal and Phase A
+--------------------------------
+Phase A proves: *we can run TRM forward passes on tensors derived from text and
+extract vectors.* It does not yet implement semantic query understanding or
+full RAG. The next steps listed in Phase A flowchart.txt remain the active
+research/engineering agenda.
+
+
+================================================================================
+7. WHERE WE ARE NOW (HONEST STATUS TABLE)
+================================================================================
+
+Done / in-repo
+  - Text → byte grid representation.
+  - Byte → ARC vocab remap (deterministic) + optional learned module.
+  - Query → puzzle_id hashing.
+  - TRM checkpoint loading + ACT forward + pooled embedding extraction.
+  - Surrogate CNN encoder for non-TRM baselines.
+  - Contrastive loss stub.
+  - Documentation: pseudoCode, flowcharts, requirements, README.
+
+Partially / not integrated
+  - TinyRecursiveModels: clone locally, not in git; must be present for TRM.
+  - Dataset: must supply real dataset.json matching checkpoint; fixture is
+    example only.
+
+Not done (major)
+  - Document ingestion, chunking, FAISS index build, BM25 hybrid.
+  - sentence-transformers baseline encoder.py as in pseudoCode.
+  - Reader (extractive QA), main.py orchestration, Streamlit demo.
+  - Fine-tuning on QA data (bridge, puzzle conditioning, or TRM layers).
+  - Systematic evaluation (EM/F1, recall@k).
+
+
+================================================================================
+8. DEPENDENCIES & REPRODUCIBILITY
+================================================================================
+
+- Python environment: requirements.txt; TRM stack also needs einops (listed).
+- TRM training/eval upstream often assumes CUDA; this Mac-oriented workflow
+  may use CPU/MPS with TRM_ENCODE_MAX_STEPS=1 for debugging.
+- Checkpoints: e.g. Hugging Face arcprize/trm_arc_prize_verification (fetch
+  via TinyRecursiveModels experiments/fetch_hf_checkpoints.py).
+- ARC raw data has licensing constraints; processed datasets are generated
+  locally per upstream README.
+
+
+================================================================================
+9. QUESTIONS FOR AN ADVISOR (CLAUDE) — WHAT TO HELP WITH
+================================================================================
+
+Use this as a checklist when asking for next-step advice:
+
+1. **Query conditioning** — What is the best next increment beyond CRC32
+   hashing (e.g. small encoder, shared query+passage grid, learned puzzle
+   embedding table resize)?
+
+2. **Training strategy** — Prioritize contrastive retrieval first vs span
+   extraction vs end-to-end; what data size is realistic for a term timeline?
+
+3. **Baseline** — Should we implement sentence-transformers RAG first to get
+   a measurable ceiling before TRM replaces the encoder?
+
+4. **Evaluation** — Which small public benchmark or custom corpus fits the
+   course rubric?
+
+5. **Compute** — Given CPU/MPS/GPU constraints, what batch sizes and model
+   parts should be frozen vs fine-tuned?
+
+6. **Scope** — What is a defensible "minimum viable" demo for the term
+   (notebook only vs CLI vs API)?
+
+7. **Thesis narrative** — How to phrase the contribution: engineering bridge,
+  empirical comparison, or negative result if TRM underperforms without
+   heavy adaptation?
+
+
+================================================================================
+10. SUGGESTED IMMEDIATE NEXT ACTIONS (NON-PRESCRIPTIVE)
+================================================================================
+
+These are plausible orders of work; an advisor should reprioritize:
+
+  1. Lock baseline RAG with MiniLM (pseudoCode Phase 3–7) on one small corpus
+     so there is a measurable end-to-end pipeline.
+  2. Parallel track: TRM embeddings for the same passages; compare retrieval
+     recall@k before investing in heavy TRM fine-tuning.
+  3. Replace hash-based query conditioning with a learned module trained on
+     (query, passage, label) triples.
+  4. Write a one-page evaluation protocol (metrics + split) for the term.
+
+================================================================================
+END OF BRIEF
+================================================================================

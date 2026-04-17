@@ -82,13 +82,35 @@ class MiniLMEncoder(BaseEncoder):
 
 
 class TRMEncoder(BaseEncoder):
-    """
-    TRM integration — wire `trm_text.trm_arc_adapter.TrmArcTextEncoder` or
-    `trm_text.hooks.load_trm_from_arc_checkpoint` and implement encode().
-    """
+    """Wraps TrmArcTextEncoder for the standard encode(texts) -> (N, D) API."""
 
-    def __init__(self, **kwargs: object) -> None:
-        pass
+    def __init__(
+        self,
+        trm_checkpoint: str = "",
+        trm_dataset_json: str = "trm_text/fixtures/example_arc_dataset.json",
+        trm_root: str = "TinyRecursiveModels",
+        device: str = "cpu",
+        batch_size: int = 4,
+        **_kwargs: object,
+    ) -> None:
+        from pathlib import Path
+
+        from trm_text.trm_arc_adapter import build_encoder_from_paths
+
+        if not trm_checkpoint:
+            raise ValueError("TRM encoder requires 'trm_checkpoint' in config.yaml.")
+
+        def _abs(p: str) -> str:
+            pp = Path(p)
+            return str(pp) if pp.is_absolute() else str(Path.cwd() / pp)
+
+        self._enc = build_encoder_from_paths(
+            checkpoint_path=_abs(trm_checkpoint),
+            dataset_json_path=_abs(trm_dataset_json),
+            tiny_recursive_models_root=_abs(trm_root),
+        )
+        self._batch_size = batch_size
+        self._hidden_size = int(self._enc.trm.config.hidden_size)
 
     def encode(
         self,
@@ -96,13 +118,20 @@ class TRMEncoder(BaseEncoder):
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> np.ndarray:
-        raise NotImplementedError(
-            "TRM encoder integration — see trm_text/trm_arc_adapter.py and hooks.py"
-        )
+        parts: list[np.ndarray] = []
+        for i in range(0, len(texts), self._batch_size):
+            chunk = texts[i : i + self._batch_size]
+            # Self-conditioning: puzzle_id derived from CRC32 of each text itself
+            emb = self._enc.encode_text_pairs(passages=chunk, queries=chunk)
+            parts.append(emb.cpu().float().numpy())
+        arr = np.concatenate(parts, axis=0)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms = np.where(norms == 0.0, 1.0, norms)
+        return (arr / norms).astype(np.float32)
 
     @property
     def embedding_dim(self) -> int:
-        raise NotImplementedError("TRM encoder integration")
+        return self._hidden_size
 
 
 class CNNEncoder(BaseEncoder):
@@ -132,7 +161,13 @@ def build_encoder(backend: str, **kwargs: object) -> BaseEncoder:
             str(kwargs.get("device", "cpu")),
         )
     if backend == "trm":
-        return TRMEncoder(**kwargs)
+        return TRMEncoder(
+            trm_checkpoint=str(kwargs.get("trm_checkpoint", "")),
+            trm_dataset_json=str(kwargs.get("trm_dataset_json", "trm_text/fixtures/example_arc_dataset.json")),
+            trm_root=str(kwargs.get("trm_root", "TinyRecursiveModels")),
+            device=str(kwargs.get("device", "cpu")),
+            batch_size=int(kwargs.get("batch_size", 4)),
+        )
     if backend == "cnn":
         return CNNEncoder(**kwargs)
     raise ValueError(f"Unknown encoder backend: {backend}")
